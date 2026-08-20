@@ -270,6 +270,7 @@ export default function FilterStudio() {
   const compareRef = useRef(compare);
   const [toast, setToast] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [isAdjustmentOpen, setIsAdjustmentOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -278,6 +279,10 @@ export default function FilterStudio() {
   const selectedName = useMemo(
     () => PRESETS.find((preset) => preset.id === selectedPreset)?.name || "自定义配方",
     [selectedPreset],
+  );
+  const adjustedCount = useMemo(
+    () => Object.values(values).filter((value) => value !== 0).length,
+    [values],
   );
 
   const showToast = useCallback((message: string) => {
@@ -594,26 +599,46 @@ export default function FilterStudio() {
         </section>
       </section>
 
-      <section className="adjustment-card card">
-        <div className="section-heading adjustment-heading"><div><span className="step-label">03 · 微调</span><h2>{selectedPreset ? `「${selectedName}」的参数` : "自定义调色参数"}</h2></div><button className="text-button" onClick={resetValues}>恢复原图</button></div>
-        {CONTROL_GROUPS.map((group) => (
-          <div className="control-group" key={group.name}>
-            <div className="control-group-title"><strong>{group.name}</strong><span>{group.count}</span></div>
-            <div className="controls-grid">
-              {group.controls.map((control) => (
-                <label className="control-item" key={control.key}>
-                  <span className="control-name"><strong>{control.label}</strong><small>{control.hint}</small></span>
-                  <input type="range" min="-100" max="100" value={values[control.key]} onChange={(event) => updateValue(control.key, Number(event.target.value))} />
-                  <output className={values[control.key] !== 0 ? "changed" : ""}>{values[control.key] > 0 ? "+" : ""}{values[control.key]}</output>
-                </label>
-              ))}
-            </div>
+      <section className={`adjustment-card card ${isAdjustmentOpen ? "is-open" : ""}`}>
+        <div className="adjustment-summary">
+          <button
+            className="adjustment-toggle"
+            type="button"
+            aria-expanded={isAdjustmentOpen}
+            aria-controls="adjustment-content"
+            onClick={() => setIsAdjustmentOpen((open) => !open)}
+          >
+            <span className="adjustment-title">
+              <span className="step-label">03 · 微调</span>
+              <strong>{selectedPreset ? `微调「${selectedName}」` : "微调自定义配方"}</strong>
+              <small>{adjustedCount > 0 ? `当前已应用 ${adjustedCount} 项参数` : "当前为原图参数"} · {isAdjustmentOpen ? "点击收起" : "需要时点击展开"}</small>
+            </span>
+            <span className="adjustment-chevron" aria-hidden="true">⌄</span>
+          </button>
+          {isAdjustmentOpen && <button className="text-button adjustment-reset" onClick={resetValues}>恢复原图</button>}
+        </div>
+        {isAdjustmentOpen && (
+          <div className="adjustment-content" id="adjustment-content">
+            {CONTROL_GROUPS.map((group) => (
+              <div className="control-group" key={group.name}>
+                <div className="control-group-title"><strong>{group.name}</strong><span>{group.count}</span></div>
+                <div className="controls-grid">
+                  {group.controls.map((control) => (
+                    <label className="control-item" key={control.key}>
+                      <span className="control-name"><strong>{control.label}</strong><small>{control.hint}</small></span>
+                      <input type="range" min="-100" max="100" value={values[control.key]} onChange={(event) => updateValue(control.key, Number(event.target.value))} />
+                      <output className={values[control.key] !== 0 ? "changed" : ""}>{values[control.key] > 0 ? "+" : ""}{values[control.key]}</output>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </section>
 
       <section className="export-bar">
-        <div><span className="step-label">04 · 完成</span><strong>照片只在你的设备上处理</strong></div>
+        <div><span className="step-label">完成</span><strong>照片只在你的设备上处理</strong></div>
         <div className="export-actions"><button className="secondary-button" onClick={saveImage}>保存照片</button><button className="primary-button" onClick={publishImage}>去发布 <span>↗</span></button></div>
       </section>
       {toast && <div className="toast" role="status">{toast}</div>}
