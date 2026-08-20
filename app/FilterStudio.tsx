@@ -456,12 +456,22 @@ export default function FilterStudio() {
 
   const getOutputDataUrl = () => processedCanvasRef.current?.toDataURL("image/jpeg", 0.94) || "";
 
+  const dataUrlToFile = (dataUrl: string, fileName: string) => {
+    const [header, payload] = dataUrl.split(",");
+    const mimeType = header.match(/data:([^;]+)/)?.[1] || "image/jpeg";
+    const binary = window.atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return new File([bytes], fileName, { type: mimeType });
+  };
+
   const saveImage = async () => {
     if (!image) {
       showToast("请先选择照片");
       return;
     }
     const dataUrl = getOutputDataUrl();
+    const fileName = `滤镜照做-${selectedName}-${Date.now()}.jpg`;
     const bridge = (window as unknown as { xhs?: { miniTool?: { writeTempFile?: (options: { data: string }) => Promise<{ filePath: string }>; saveImageToPhotosAlbum?: (options: { filePath: string }) => Promise<unknown> } } }).xhs?.miniTool;
     if (bridge?.writeTempFile && bridge?.saveImageToPhotosAlbum) {
       try {
@@ -473,10 +483,31 @@ export default function FilterStudio() {
       }
       return;
     }
+
+    const file = dataUrlToFile(dataUrl, fileName);
+    const shareData = { files: [file], title: "保存调色照片" };
+    const shareNavigator = navigator as Navigator & {
+      canShare?: (data: typeof shareData) => boolean;
+      share?: (data: typeof shareData) => Promise<void>;
+    };
+    if (shareNavigator.share && (!shareNavigator.canShare || shareNavigator.canShare(shareData))) {
+      try {
+        showToast("请在系统菜单中选择存储照片");
+        await shareNavigator.share(shareData);
+      } catch (error) {
+        showToast(error instanceof DOMException && error.name === "AbortError" ? "已取消保存" : "无法打开系统保存菜单");
+      }
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
     const anchor = document.createElement("a");
-    anchor.href = dataUrl;
-    anchor.download = `滤镜照做-${selectedName}-${Date.now()}.jpg`;
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
     anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     showToast("已下载本地预览图");
   };
 
