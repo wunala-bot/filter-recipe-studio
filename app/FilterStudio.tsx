@@ -77,7 +77,7 @@ const PRESETS: Preset[] = [
     scene: "美食 · 日常",
     tone: "暖润鲜活",
     swatch: "linear-gradient(135deg, #8f442d 0%, #dc8b51 52%, #f5d99c 100%)",
-    values: completeValues({ exposure: 10, brilliance: 65, highlights: -20, shadows: -30, contrast: -30, brightness: 20, blackPoint: 20, vibrance: -8, temperature: 20, tint: 5, sharpness: 60, definition: 5 }),
+    values: completeValues({ exposure: 10, brilliance: 65, highlights: -20, shadows: -30, contrast: 10, brightness: 20, blackPoint: 20, vibrance: -8, temperature: 20, tint: 5, sharpness: 60, definition: 5 }),
   },
 ];
 
@@ -259,8 +259,8 @@ function parseRecipe(text: string) {
 
 export default function FilterStudio() {
   const [activeTab, setActiveTab] = useState<"presets" | "paste">("presets");
-  const [values, setValues] = useState<FilterValues>(PRESETS[0].values);
-  const [selectedPreset, setSelectedPreset] = useState(PRESETS[0].id);
+  const [values, setValues] = useState<FilterValues>(DEFAULT_VALUES);
+  const [selectedPreset, setSelectedPreset] = useState("");
   const [recipeText, setRecipeText] = useState("曝光-19，鲜明度-40，对比度+6，亮度-14，饱和度-15，锐化+18，清晰度+29");
   const [sourceApp, setSourceApp] = useState("iPhone 相册");
   const [parseResult, setParseResult] = useState<ReturnType<typeof parseRecipe> | null>(null);
@@ -610,7 +610,7 @@ export default function FilterStudio() {
           >
             <span className="adjustment-title">
               <span className="step-label">03 · 微调</span>
-              <strong>{selectedPreset ? `微调「${selectedName}」` : "微调自定义配方"}</strong>
+              <strong>{selectedPreset ? `微调「${selectedName}」` : "微调参数"}</strong>
               <small>{adjustedCount > 0 ? `当前已应用 ${adjustedCount} 项参数` : "当前为原图参数"} · {isAdjustmentOpen ? "点击收起" : "需要时点击展开"}</small>
             </span>
             <span className="adjustment-chevron" aria-hidden="true">⌄</span>
