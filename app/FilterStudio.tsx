@@ -63,6 +63,22 @@ const PRESETS: Preset[] = [
     swatch: "linear-gradient(135deg, #111a25 0%, #40505b 52%, #99a7aa 100%)",
     values: completeValues({ brilliance: 47, shadows: -79, brightness: 33, blackPoint: 27, saturation: -24, temperature: -11, sharpness: 43, definition: 51 }),
   },
+  {
+    id: "bright-clear",
+    name: "明亮清透",
+    scene: "日常 · 人像",
+    tone: "明亮通透",
+    swatch: "linear-gradient(135deg, #b9dce3 0%, #f3ead7 52%, #fffdf4 100%)",
+    values: completeValues({ exposure: 10, brilliance: 56, highlights: -35, contrast: 32, shadows: 20, saturation: 8, temperature: 10, sharpness: 80 }),
+  },
+  {
+    id: "appetite",
+    name: "食欲感调色",
+    scene: "美食 · 日常",
+    tone: "暖润鲜活",
+    swatch: "linear-gradient(135deg, #8f442d 0%, #dc8b51 52%, #f5d99c 100%)",
+    values: completeValues({ exposure: 10, brilliance: 65, highlights: -20, shadows: -30, contrast: -30, brightness: 20, blackPoint: 20, vibrance: -8, temperature: 20, tint: 5, sharpness: 60, definition: 5 }),
+  },
 ];
 
 const CONTROLS: { key: FilterKey; label: string; hint: string }[] = [
@@ -541,7 +557,7 @@ export default function FilterStudio() {
 
           {activeTab === "presets" ? (
             <div className="preset-content">
-              <p className="panel-intro">当前先收录一款配方，后续再逐步扩充。</p>
+              <p className="panel-intro">已收录 3 款调色配方，选择后即可预览效果。</p>
               <div className="preset-grid">
                 {PRESETS.map((preset) => (
                   <button key={preset.id} className={`preset-card ${selectedPreset === preset.id ? "selected" : ""}`} onClick={() => applyPreset(preset)}>
