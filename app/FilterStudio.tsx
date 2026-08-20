@@ -232,6 +232,65 @@ function applySpatialAdjustments(pixels: Uint8ClampedArray, width: number, heigh
   }
 }
 
+function applyFilterValues(frame: ImageData, width: number, height: number, values: FilterValues) {
+  const pixels = frame.data;
+  const exposureGain = Math.pow(2, values.exposure / 100);
+  const brillianceFactor = values.brilliance / 100;
+  const contrastValue = values.contrast * 1.55 + values.brilliance * 0.12;
+  const contrastFactor = (259 * (contrastValue + 255)) / (255 * (259 - contrastValue));
+  const saturationFactor = 1 + values.saturation / 100;
+  const fadeFactor = Math.max(0, values.fade) / 100;
+  const grainAmount = Math.max(0, values.grain) * 0.42;
+  const vignetteAmount = values.vignette / 100;
+  const cx = width / 2;
+  const cy = height / 2;
+  const maxDistance = Math.sqrt(cx * cx + cy * cy);
+  let seed = 9187;
+
+  for (let i = 0; i < pixels.length; i += 4) {
+    let r = pixels[i] * exposureGain + values.brightness * 0.75;
+    let g = pixels[i + 1] * exposureGain + values.brightness * 0.75;
+    let b = pixels[i + 2] * exposureGain + values.brightness * 0.75;
+    const beforeTone = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const shadowWeight = Math.pow(1 - clamp(beforeTone) / 255, 1.7);
+    const highlightWeight = Math.pow(clamp(beforeTone) / 255, 1.7);
+    const midtoneWeight = 1 - Math.min(1, Math.abs(clamp(beforeTone) - 128) / 128);
+    const brillianceShift = brillianceFactor * (8 + midtoneWeight * 18 + shadowWeight * 10);
+    const blackPointShift = -values.blackPoint * Math.pow(shadowWeight, 1.45) * 0.72;
+    const toneShift = values.shadows * shadowWeight * 0.62 + values.highlights * highlightWeight * 0.62 + brillianceShift + blackPointShift;
+    r += toneShift + values.temperature * 0.48;
+    g += toneShift + values.temperature * 0.06 - values.tint * 0.34;
+    b += toneShift - values.temperature * 0.48 + values.tint * 0.22;
+    r += values.tint * 0.22;
+    r = contrastFactor * (r - 128) + 128;
+    g = contrastFactor * (g - 128) + 128;
+    b = contrastFactor * (b - 128) + 128;
+    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    r = luminance + (r - luminance) * saturationFactor;
+    g = luminance + (g - luminance) * saturationFactor;
+    b = luminance + (b - luminance) * saturationFactor;
+    const colorfulness = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
+    const vibranceFactor = 1 + values.vibrance / 100 * (1 - clamp(colorfulness, 0, 1)) * 0.9;
+    r = luminance + (r - luminance) * vibranceFactor;
+    g = luminance + (g - luminance) * vibranceFactor;
+    b = luminance + (b - luminance) * vibranceFactor;
+    r = r * (1 - fadeFactor * 0.28) + 132 * fadeFactor * 0.28;
+    g = g * (1 - fadeFactor * 0.28) + 128 * fadeFactor * 0.28;
+    b = b * (1 - fadeFactor * 0.28) + 123 * fadeFactor * 0.28;
+    seed = (seed * 9301 + 49297) % 233280;
+    const noise = (seed / 233280 - 0.5) * grainAmount;
+    const pixelIndex = i / 4;
+    const x = pixelIndex % width;
+    const y = Math.floor(pixelIndex / width);
+    const distance = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) / maxDistance;
+    const vignette = 1 - Math.max(0, distance - 0.28) ** 1.7 * vignetteAmount * 0.82;
+    pixels[i] = clamp((r + noise) * vignette);
+    pixels[i + 1] = clamp((g + noise) * vignette);
+    pixels[i + 2] = clamp((b + noise) * vignette);
+  }
+  applySpatialAdjustments(pixels, width, height, values);
+}
+
 function parseRecipe(text: string) {
   const normalized = text.replace(/＋/g, "+").replace(/[−–—]/g, "-").replace(/：/g, ":").replace(/，/g, ",");
   const values: Partial<FilterValues> = {};
@@ -329,62 +388,7 @@ export default function FilterStudio() {
     if (!sourceCtx || !processedCtx) return;
     sourceCtx.drawImage(image, 0, 0, width, height);
     const frame = sourceCtx.getImageData(0, 0, width, height);
-    const pixels = frame.data;
-    const exposureGain = Math.pow(2, values.exposure / 100);
-    const brillianceFactor = values.brilliance / 100;
-    const contrastValue = values.contrast * 1.55 + values.brilliance * 0.12;
-    const contrastFactor = (259 * (contrastValue + 255)) / (255 * (259 - contrastValue));
-    const saturationFactor = 1 + values.saturation / 100;
-    const fadeFactor = Math.max(0, values.fade) / 100;
-    const grainAmount = Math.max(0, values.grain) * 0.42;
-    const vignetteAmount = values.vignette / 100;
-    const cx = width / 2;
-    const cy = height / 2;
-    const maxDistance = Math.sqrt(cx * cx + cy * cy);
-    let seed = 9187;
-
-    for (let i = 0; i < pixels.length; i += 4) {
-      let r = pixels[i] * exposureGain + values.brightness * 0.75;
-      let g = pixels[i + 1] * exposureGain + values.brightness * 0.75;
-      let b = pixels[i + 2] * exposureGain + values.brightness * 0.75;
-      const beforeTone = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      const shadowWeight = Math.pow(1 - clamp(beforeTone) / 255, 1.7);
-      const highlightWeight = Math.pow(clamp(beforeTone) / 255, 1.7);
-      const midtoneWeight = 1 - Math.min(1, Math.abs(clamp(beforeTone) - 128) / 128);
-      const brillianceShift = brillianceFactor * (8 + midtoneWeight * 18 + shadowWeight * 10);
-      const blackPointShift = -values.blackPoint * Math.pow(shadowWeight, 1.45) * 0.72;
-      const toneShift = values.shadows * shadowWeight * 0.62 + values.highlights * highlightWeight * 0.62 + brillianceShift + blackPointShift;
-      r += toneShift + values.temperature * 0.48;
-      g += toneShift + values.temperature * 0.06 - values.tint * 0.34;
-      b += toneShift - values.temperature * 0.48 + values.tint * 0.22;
-      r += values.tint * 0.22;
-      r = contrastFactor * (r - 128) + 128;
-      g = contrastFactor * (g - 128) + 128;
-      b = contrastFactor * (b - 128) + 128;
-      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      r = luminance + (r - luminance) * saturationFactor;
-      g = luminance + (g - luminance) * saturationFactor;
-      b = luminance + (b - luminance) * saturationFactor;
-      const colorfulness = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
-      const vibranceFactor = 1 + values.vibrance / 100 * (1 - clamp(colorfulness, 0, 1)) * 0.9;
-      r = luminance + (r - luminance) * vibranceFactor;
-      g = luminance + (g - luminance) * vibranceFactor;
-      b = luminance + (b - luminance) * vibranceFactor;
-      r = r * (1 - fadeFactor * 0.28) + 132 * fadeFactor * 0.28;
-      g = g * (1 - fadeFactor * 0.28) + 128 * fadeFactor * 0.28;
-      b = b * (1 - fadeFactor * 0.28) + 123 * fadeFactor * 0.28;
-      seed = (seed * 9301 + 49297) % 233280;
-      const noise = (seed / 233280 - 0.5) * grainAmount;
-      const pixelIndex = i / 4;
-      const x = pixelIndex % width;
-      const y = Math.floor(pixelIndex / width);
-      const distance = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2) / maxDistance;
-      const vignette = 1 - Math.max(0, distance - 0.28) ** 1.7 * vignetteAmount * 0.82;
-      pixels[i] = clamp((r + noise) * vignette);
-      pixels[i + 1] = clamp((g + noise) * vignette);
-      pixels[i + 2] = clamp((b + noise) * vignette);
-    }
-    applySpatialAdjustments(pixels, width, height, values);
+    applyFilterValues(frame, width, height, values);
     processedCtx.putImageData(frame, 0, 0);
     drawComparison();
   }, [drawComparison, image, values]);
@@ -454,7 +458,25 @@ export default function FilterStudio() {
     showToast("已恢复原图参数");
   };
 
-  const getOutputDataUrl = () => processedCanvasRef.current?.toDataURL("image/jpeg", 0.94) || "";
+  const getOutputDataUrl = () => {
+    if (!image) return "";
+    const maxSide = 3000;
+    const ratio = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * ratio));
+    const height = Math.max(1, Math.round(image.naturalHeight * ratio));
+    const output = document.createElement("canvas");
+    output.width = width;
+    output.height = height;
+    const context = output.getContext("2d", { willReadFrequently: true });
+    if (!context) return "";
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, width, height);
+    const frame = context.getImageData(0, 0, width, height);
+    applyFilterValues(frame, width, height, values);
+    context.putImageData(frame, 0, 0);
+    return output.toDataURL("image/jpeg", 0.98);
+  };
 
   const dataUrlToFile = (dataUrl: string, fileName: string) => {
     const [header, payload] = dataUrl.split(",");
