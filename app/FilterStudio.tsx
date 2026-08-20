@@ -32,6 +32,32 @@ type Preset = {
   values: FilterValues;
 };
 
+type PhotoProfile = {
+  brightness: number;
+  saturation: number;
+  warmth: number;
+  highlightClip: number;
+  shadowClip: number;
+  labels: string[];
+};
+
+type RecipeAdaptation = {
+  values: FilterValues;
+  message: string;
+};
+
+type PhotoItem = {
+  id: string;
+  image: HTMLImageElement;
+  name: string;
+  objectUrl: string;
+  thumbnail: string;
+  profile: PhotoProfile | null;
+  values: FilterValues;
+  selectedPreset: string;
+  recipeBaseline: FilterValues | null;
+};
+
 const DEFAULT_VALUES: FilterValues = {
   exposure: 0,
   brilliance: 0,
@@ -291,6 +317,114 @@ function applyFilterValues(frame: ImageData, width: number, height: number, valu
   applySpatialAdjustments(pixels, width, height, values);
 }
 
+function analyzePhoto(image: HTMLImageElement): PhotoProfile | null {
+  const maxSide = 320;
+  const ratio = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * ratio));
+  const height = Math.max(1, Math.round(image.naturalHeight * ratio));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  context.drawImage(image, 0, 0, width, height);
+  const pixels = context.getImageData(0, 0, width, height).data;
+  let luminanceTotal = 0;
+  let saturationTotal = 0;
+  let warmthTotal = 0;
+  let highlightCount = 0;
+  let shadowCount = 0;
+  let count = 0;
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    const red = pixels[index];
+    const green = pixels[index + 1];
+    const blue = pixels[index + 2];
+    const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    const maximum = Math.max(red, green, blue);
+    const minimum = Math.min(red, green, blue);
+    luminanceTotal += luminance;
+    saturationTotal += maximum === 0 ? 0 : (maximum - minimum) / maximum;
+    warmthTotal += red - blue;
+    if (luminance >= 242) highlightCount += 1;
+    if (luminance <= 18) shadowCount += 1;
+    count += 1;
+  }
+
+  const brightness = luminanceTotal / count;
+  const saturation = saturationTotal / count;
+  const warmth = warmthTotal / count;
+  return {
+    brightness,
+    saturation,
+    warmth,
+    highlightClip: highlightCount / count,
+    shadowClip: shadowCount / count,
+    labels: [
+      brightness < 92 ? "偏暗" : brightness > 174 ? "偏亮" : "光线均衡",
+      saturation < 0.2 ? "低饱和" : saturation > 0.48 ? "色彩浓郁" : "色彩自然",
+      warmth < -11 ? "偏冷" : warmth > 11 ? "偏暖" : "冷暖自然",
+    ],
+  };
+}
+
+function createThumbnail(image: HTMLImageElement) {
+  const size = 160;
+  const scale = Math.max(size / image.naturalWidth, size / image.naturalHeight);
+  const width = image.naturalWidth * scale;
+  const height = image.naturalHeight * scale;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) return "";
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+  return canvas.toDataURL("image/jpeg", 0.78);
+}
+
+function createRecipeAdaptation(values: FilterValues, profile: PhotoProfile): RecipeAdaptation | null {
+  const adapted = { ...values };
+  const reasons: string[] = [];
+
+  if (profile.brightness > 174) {
+    const originalExposure = adapted.exposure;
+    const originalBrightness = adapted.brightness;
+    if (adapted.exposure > 0) adapted.exposure = Math.round(adapted.exposure * 0.45);
+    if (adapted.brightness > 0) adapted.brightness = Math.round(adapted.brightness * 0.45);
+    if (profile.highlightClip > 0.015) adapted.highlights = Math.min(adapted.highlights, -20);
+    if (adapted.exposure !== originalExposure || adapted.brightness !== originalBrightness || adapted.highlights !== values.highlights) {
+      reasons.push("原图光线较强，建议减弱提亮并保护高光");
+    }
+  } else if (profile.brightness < 92) {
+    const boost = profile.brightness < 64 ? 16 : 10;
+    adapted.exposure = clamp(adapted.exposure + Math.round(boost * 0.45), -100, 100);
+    adapted.brightness = clamp(adapted.brightness + boost, -100, 100);
+    reasons.push("原图偏暗，建议增加一点整体光感");
+  }
+
+  if (profile.saturation > 0.48 && (adapted.saturation > 0 || adapted.vibrance > 0)) {
+    if (adapted.saturation > 0) adapted.saturation = Math.round(adapted.saturation * 0.4);
+    if (adapted.vibrance > 0) adapted.vibrance = Math.round(adapted.vibrance * 0.45);
+    reasons.push("原图颜色已经比较浓，建议减弱增色力度");
+  } else if (profile.saturation < 0.16 && (adapted.saturation < 0 || adapted.vibrance < 0)) {
+    if (adapted.saturation < 0) adapted.saturation = Math.round(adapted.saturation * 0.55);
+    if (adapted.vibrance < 0) adapted.vibrance = Math.round(adapted.vibrance * 0.55);
+    reasons.push("原图颜色较淡，建议减少褪色程度");
+  }
+
+  if (profile.shadowClip > 0.08 && (adapted.shadows < -35 || adapted.blackPoint > 0)) {
+    adapted.shadows = Math.max(adapted.shadows, -35);
+    adapted.blackPoint = Math.round(adapted.blackPoint * 0.6);
+    reasons.push("原图暗部较重，建议保留更多阴影细节");
+  }
+
+  const changed = (Object.keys(adapted) as FilterKey[]).some((key) => adapted[key] !== values[key]);
+  if (!changed) return null;
+  return { values: adapted, message: `${reasons.slice(0, 2).join("；")}。` };
+}
+
 function parseRecipe(text: string) {
   const normalized = text.replace(/＋/g, "+").replace(/[−–—]/g, "-").replace(/：/g, ":").replace(/，/g, ",");
   const values: Partial<FilterValues> = {};
@@ -318,13 +452,11 @@ function parseRecipe(text: string) {
 
 export default function FilterStudio() {
   const [activeTab, setActiveTab] = useState<"presets" | "paste">("presets");
-  const [values, setValues] = useState<FilterValues>(DEFAULT_VALUES);
-  const [selectedPreset, setSelectedPreset] = useState("");
   const [recipeText, setRecipeText] = useState("曝光-19，鲜明度-40，对比度+6，亮度-14，饱和度-15，锐化+18，清晰度+29");
   const [sourceApp, setSourceApp] = useState("iPhone 相册");
   const [parseResult, setParseResult] = useState<ReturnType<typeof parseRecipe> | null>(null);
-  const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [imageName, setImageName] = useState("");
+  const [photos, setPhotos] = useState<PhotoItem[]>([]);
+  const [activePhotoId, setActivePhotoId] = useState("");
   const [compare, setCompare] = useState(32);
   const compareRef = useRef(compare);
   const [toast, setToast] = useState("");
@@ -335,6 +467,17 @@ export default function FilterStudio() {
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const processedCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  const activePhoto = useMemo(
+    () => photos.find((photo) => photo.id === activePhotoId) || photos[0] || null,
+    [activePhotoId, photos],
+  );
+  const image = activePhoto?.image || null;
+  const imageName = activePhoto?.name || "";
+  const photoProfile = activePhoto?.profile || null;
+  const values = activePhoto?.values || DEFAULT_VALUES;
+  const selectedPreset = activePhoto?.selectedPreset || "";
+  const recipeBaseline = activePhoto?.recipeBaseline || null;
+
   const selectedName = useMemo(
     () => PRESETS.find((preset) => preset.id === selectedPreset)?.name || "自定义配方",
     [selectedPreset],
@@ -343,6 +486,15 @@ export default function FilterStudio() {
     () => Object.values(values).filter((value) => value !== 0).length,
     [values],
   );
+  const recipeAdaptation = useMemo(
+    () => photoProfile && recipeBaseline ? createRecipeAdaptation(recipeBaseline, photoProfile) : null,
+    [photoProfile, recipeBaseline],
+  );
+
+  const updateActivePhoto = useCallback((updater: (photo: PhotoItem) => PhotoItem) => {
+    if (!activePhotoId) return;
+    setPhotos((current) => current.map((photo) => photo.id === activePhotoId ? updater(photo) : photo));
+  }, [activePhotoId]);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -403,35 +555,83 @@ export default function FilterStudio() {
     drawComparison();
   }, [compare, drawComparison]);
 
-  const loadFile = useCallback((file?: File) => {
-    if (!file || !file.type.startsWith("image/")) {
-      showToast("请选择一张图片");
+  const loadImageFile = useCallback((file: File) => new Promise<PhotoItem>((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const nextImage = new Image();
+    nextImage.onload = () => resolve({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      image: nextImage,
+      name: file.name,
+      objectUrl,
+      thumbnail: createThumbnail(nextImage),
+      profile: analyzePhoto(nextImage),
+      values: activePhoto?.values || DEFAULT_VALUES,
+      selectedPreset: activePhoto?.selectedPreset || "",
+      recipeBaseline: activePhoto?.recipeBaseline || null,
+    });
+    nextImage.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("image-load-failed"));
+    };
+    nextImage.src = objectUrl;
+  }), [activePhoto]);
+
+  const loadFiles = useCallback(async (fileList?: FileList | File[]) => {
+    const remaining = Math.max(0, 18 - photos.length);
+    const validFiles = Array.from(fileList || []).filter((file) => file.type.startsWith("image/")).slice(0, remaining);
+    if (!validFiles.length) {
+      showToast(remaining === 0 ? "最多可以选择 18 张照片" : "请选择图片文件");
       return;
     }
-    const url = URL.createObjectURL(file);
-    const nextImage = new Image();
-    nextImage.onload = () => {
-      setImage(nextImage);
-      setImageName(file.name);
-      setCompare(32);
-      URL.revokeObjectURL(url);
-    };
-    nextImage.onerror = () => showToast("这张图片暂时无法读取");
-    nextImage.src = url;
-  }, [showToast]);
+    const loaded: PhotoItem[] = [];
+    for (const file of validFiles) {
+      try {
+        loaded.push(await loadImageFile(file));
+      } catch {
+        // Skip unreadable files and continue loading the rest of the batch.
+      }
+    }
+    if (!loaded.length) {
+      showToast("这些照片暂时无法读取");
+      return;
+    }
+    setPhotos((current) => [...current, ...loaded]);
+    if (!activePhotoId) setActivePhotoId(loaded[0].id);
+    setCompare(32);
+    showToast(`已加入 ${loaded.length} 张照片${validFiles.length < Array.from(fileList || []).length ? "，最多保留 18 张" : ""}`);
+  }, [activePhotoId, loadImageFile, photos.length, showToast]);
 
-  const onFileChange = (event: ChangeEvent<HTMLInputElement>) => loadFile(event.target.files?.[0]);
+  const onFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    void loadFiles(event.target.files || undefined);
+    event.target.value = "";
+  };
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragging(false);
-    loadFile(event.dataTransfer.files?.[0]);
+    void loadFiles(event.dataTransfer.files);
+  };
+
+  const removePhoto = (photoId: string) => {
+    const photo = photos.find((item) => item.id === photoId);
+    if (photo) URL.revokeObjectURL(photo.objectUrl);
+    const remaining = photos.filter((item) => item.id !== photoId);
+    setPhotos(remaining);
+    if (activePhotoId === photoId) setActivePhotoId(remaining[0]?.id || "");
   };
 
   const applyPreset = (preset: Preset) => {
-    setValues(preset.values);
-    setSelectedPreset(preset.id);
+    if (!photos.length) {
+      showToast("请先选择照片");
+      return;
+    }
+    setPhotos((current) => current.map((photo) => ({
+      ...photo,
+      values: preset.values,
+      recipeBaseline: preset.values,
+      selectedPreset: preset.id,
+    })));
     setParseResult(null);
-    showToast(`已应用「${preset.name}」`);
+    showToast(`已将「${preset.name}」应用到 ${photos.length} 张照片`);
   };
 
   const analyzeRecipe = () => {
@@ -441,29 +641,48 @@ export default function FilterStudio() {
       showToast("还没找到可识别的数值参数");
       return;
     }
-    setValues({ ...DEFAULT_VALUES, ...result.values });
-    setSelectedPreset("");
-    showToast(`已识别 ${result.recognized.length} 项参数`);
+    if (!photos.length) {
+      showToast("参数已识别，请先选择照片");
+      return;
+    }
+    const parsedValues = { ...DEFAULT_VALUES, ...result.values };
+    setPhotos((current) => current.map((photo) => ({ ...photo, values: parsedValues, recipeBaseline: parsedValues, selectedPreset: "" })));
+    showToast(`已识别 ${result.recognized.length} 项参数并应用到全部照片`);
   };
 
   const updateValue = (key: FilterKey, value: number) => {
-    setValues((current) => ({ ...current, [key]: value }));
-    setSelectedPreset("");
+    updateActivePhoto((photo) => ({ ...photo, values: { ...photo.values, [key]: value }, recipeBaseline: null, selectedPreset: "" }));
   };
 
   const resetValues = () => {
-    setValues(DEFAULT_VALUES);
-    setSelectedPreset("");
+    updateActivePhoto((photo) => ({ ...photo, values: DEFAULT_VALUES, recipeBaseline: null, selectedPreset: "" }));
     setParseResult(null);
-    showToast("已恢复原图参数");
+    showToast("当前照片已恢复原图参数");
   };
 
-  const getOutputDataUrl = () => {
-    if (!image) return "";
+  const applySmartAdaptation = () => {
+    if (!recipeAdaptation) return;
+    updateActivePhoto((photo) => ({ ...photo, values: recipeAdaptation.values, recipeBaseline: null }));
+    showToast("已根据当前照片智能适配");
+  };
+
+  const applyCurrentValuesToAll = () => {
+    if (!activePhoto || photos.length < 2) return;
+    setPhotos((current) => current.map((photo) => ({
+      ...photo,
+      values: activePhoto.values,
+      selectedPreset: activePhoto.selectedPreset,
+      recipeBaseline: null,
+    })));
+    showToast(`已将当前参数应用到 ${photos.length} 张照片`);
+  };
+
+  const getOutputDataUrl = (sourceImage = image, filterValues = values) => {
+    if (!sourceImage) return "";
     const maxSide = 3000;
-    const ratio = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
-    const width = Math.max(1, Math.round(image.naturalWidth * ratio));
-    const height = Math.max(1, Math.round(image.naturalHeight * ratio));
+    const ratio = Math.min(1, maxSide / Math.max(sourceImage.naturalWidth, sourceImage.naturalHeight));
+    const width = Math.max(1, Math.round(sourceImage.naturalWidth * ratio));
+    const height = Math.max(1, Math.round(sourceImage.naturalHeight * ratio));
     const output = document.createElement("canvas");
     output.width = width;
     output.height = height;
@@ -471,9 +690,9 @@ export default function FilterStudio() {
     if (!context) return "";
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = "high";
-    context.drawImage(image, 0, 0, width, height);
+    context.drawImage(sourceImage, 0, 0, width, height);
     const frame = context.getImageData(0, 0, width, height);
-    applyFilterValues(frame, width, height, values);
+    applyFilterValues(frame, width, height, filterValues);
     context.putImageData(frame, 0, 0);
     return output.toDataURL("image/jpeg", 0.98);
   };
@@ -488,26 +707,33 @@ export default function FilterStudio() {
   };
 
   const saveImage = async () => {
-    if (!image) {
+    if (!photos.length) {
       showToast("请先选择照片");
       return;
     }
-    const dataUrl = getOutputDataUrl();
-    const fileName = `滤镜照做-${selectedName}-${Date.now()}.jpg`;
+    showToast(`正在生成 ${photos.length} 张高清照片`);
+    const outputs = photos.map((photo, index) => {
+      const presetName = PRESETS.find((preset) => preset.id === photo.selectedPreset)?.name || "自定义配方";
+      const dataUrl = getOutputDataUrl(photo.image, photo.values);
+      const fileName = `滤镜照做-${presetName}-${index + 1}.jpg`;
+      return { dataUrl, fileName };
+    });
     const bridge = (window as unknown as { xhs?: { miniTool?: { writeTempFile?: (options: { data: string }) => Promise<{ filePath: string }>; saveImageToPhotosAlbum?: (options: { filePath: string }) => Promise<unknown> } } }).xhs?.miniTool;
     if (bridge?.writeTempFile && bridge?.saveImageToPhotosAlbum) {
       try {
-        const { filePath } = await bridge.writeTempFile({ data: dataUrl });
-        await bridge.saveImageToPhotosAlbum({ filePath });
-        showToast("已保存到系统相册");
+        for (const output of outputs) {
+          const { filePath } = await bridge.writeTempFile({ data: output.dataUrl });
+          await bridge.saveImageToPhotosAlbum({ filePath });
+        }
+        showToast(`已保存 ${outputs.length} 张照片到系统相册`);
       } catch {
         showToast("保存失败，请稍后再试");
       }
       return;
     }
 
-    const file = dataUrlToFile(dataUrl, fileName);
-    const shareData = { files: [file], title: "保存调色照片" };
+    const files = outputs.map((output) => dataUrlToFile(output.dataUrl, output.fileName));
+    const shareData = { files, title: "保存调色照片" };
     const shareNavigator = navigator as Navigator & {
       canShare?: (data: typeof shareData) => boolean;
       share?: (data: typeof shareData) => Promise<void>;
@@ -522,19 +748,21 @@ export default function FilterStudio() {
       return;
     }
 
-    const objectUrl = URL.createObjectURL(file);
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = fileName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    showToast("已下载本地预览图");
+    files.forEach((file) => {
+      const objectUrl = URL.createObjectURL(file);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = file.name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    });
+    showToast(`已下载 ${files.length} 张本地预览图`);
   };
 
   const publishImage = async () => {
-    if (!image) {
+    if (!photos.length) {
       showToast("请先选择照片");
       return;
     }
@@ -546,7 +774,7 @@ export default function FilterStudio() {
     try {
       await bridge.postNote({
         pageType: "photo_publish",
-        mediaInfo: { image_resources: [{ url: getOutputDataUrl() }] },
+        mediaInfo: { image_resources: photos.map((photo) => ({ url: getOutputDataUrl(photo.image, photo.values) })) },
       });
     } catch {
       showToast("暂时无法进入发布页");
@@ -571,12 +799,12 @@ export default function FilterStudio() {
           <div className="section-heading">
             <div>
               <span className="step-label">01 · 照片</span>
-              <h2>{image ? imageName : "先选一张想调的照片"}</h2>
+              <h2>{image ? `${photos.length} 张照片 · ${imageName}` : "选择想调色的照片"}</h2>
             </div>
-            {image && <button className="text-button" onClick={() => inputRef.current?.click()}>换一张</button>}
+            {image && photos.length < 18 && <button className="text-button" onClick={() => inputRef.current?.click()}>添加照片</button>}
           </div>
 
-          <input ref={inputRef} className="visually-hidden" type="file" accept="image/*" onChange={onFileChange} />
+          <input ref={inputRef} className="visually-hidden" type="file" accept="image/*" multiple onChange={onFileChange} />
           {!image ? (
             <div
               className={`upload-zone ${isDragging ? "is-dragging" : ""}`}
@@ -585,8 +813,8 @@ export default function FilterStudio() {
               onDrop={onDrop}
             >
               <div className="upload-art" aria-hidden="true"><span className="sun-dot" /><span className="mountain mountain-one" /><span className="mountain mountain-two" /></div>
-              <h3>拖入照片，或从电脑选择</h3>
-              <p>JPG、PNG、WEBP · 图片只在本地处理</p>
+              <h3>一次选择多张照片</h3>
+              <p>最多 18 张 · JPG、PNG、WEBP · 只在本地处理</p>
               <button className="primary-button upload-button" onClick={() => inputRef.current?.click()}><span aria-hidden="true">+</span> 选择照片</button>
             </div>
           ) : (
@@ -601,6 +829,24 @@ export default function FilterStudio() {
                 <input type="range" min="5" max="95" value={compare} onChange={(event) => setCompare(Number(event.target.value))} aria-label="调整前后对比位置" />
                 <span>效果</span>
               </div>
+              <div className="photo-strip" aria-label={`已选择 ${photos.length} 张照片`}>
+                {photos.map((photo, index) => (
+                  <div className={`photo-thumb-wrap ${photo.id === activePhoto?.id ? "active" : ""}`} key={photo.id}>
+                    <button className="photo-thumb" type="button" onClick={() => { setActivePhotoId(photo.id); setCompare(32); }} aria-label={`查看第 ${index + 1} 张照片：${photo.name}`}>
+                      <img src={photo.thumbnail} alt="" />
+                      <span>{index + 1}</span>
+                    </button>
+                    <button className="remove-photo" type="button" onClick={() => removePhoto(photo.id)} aria-label={`移除第 ${index + 1} 张照片`}>×</button>
+                  </div>
+                ))}
+                {photos.length < 18 && <button className="add-photo-tile" type="button" onClick={() => inputRef.current?.click()} aria-label="继续添加照片">+</button>}
+              </div>
+            </div>
+          )}
+          {photoProfile && (
+            <div className="photo-profile" aria-label="原图分析结果">
+              <strong><span aria-hidden="true">✦</span> 原图分析</strong>
+              <div>{photoProfile.labels.map((label) => <span key={label}>{label}</span>)}</div>
             </div>
           )}
           <div className="privacy-note"><span aria-hidden="true">◇</span> 不上传、不存储、只在本地处理</div>
@@ -615,7 +861,7 @@ export default function FilterStudio() {
 
           {activeTab === "presets" ? (
             <div className="preset-content">
-              <p className="panel-intro">已收录 3 款调色配方，选择后即可预览效果。</p>
+              <p className="panel-intro">选择后会应用到全部照片，每张照片仍可单独智能适配。</p>
               <div className="preset-grid">
                 {PRESETS.map((preset) => (
                   <button key={preset.id} className={`preset-card ${selectedPreset === preset.id ? "selected" : ""}`} onClick={() => applyPreset(preset)}>
@@ -649,6 +895,16 @@ export default function FilterStudio() {
               )}
             </div>
           )}
+          {recipeAdaptation && (
+            <div className="smart-suggestion">
+              <span className="smart-icon" aria-hidden="true">✦</span>
+              <div className="smart-copy">
+                <strong>更适合这张照片</strong>
+                <p>{recipeAdaptation.message}</p>
+              </div>
+              <button type="button" onClick={applySmartAdaptation}>一键适配</button>
+            </div>
+          )}
         </section>
       </section>
 
@@ -668,7 +924,12 @@ export default function FilterStudio() {
             </span>
             <span className="adjustment-chevron" aria-hidden="true">⌄</span>
           </button>
-          {isAdjustmentOpen && <button className="text-button adjustment-reset" onClick={resetValues}>恢复原图</button>}
+          {isAdjustmentOpen && (
+            <div className="adjustment-actions">
+              {photos.length > 1 && <button className="text-button" onClick={applyCurrentValuesToAll}>应用到全部</button>}
+              <button className="text-button" onClick={resetValues}>恢复原图</button>
+            </div>
+          )}
         </div>
         {isAdjustmentOpen && (
           <div className="adjustment-content" id="adjustment-content">
@@ -691,8 +952,8 @@ export default function FilterStudio() {
       </section>
 
       <section className="export-bar">
-        <div><span className="step-label">完成</span><strong>照片只在你的设备上处理</strong></div>
-        <div className="export-actions"><button className="secondary-button" onClick={saveImage}>保存照片</button><button className="primary-button" onClick={publishImage}>去发布 <span>↗</span></button></div>
+        <div><span className="step-label">完成</span><strong>{photos.length > 1 ? `${photos.length} 张照片已准备好` : "照片只在你的设备上处理"}</strong></div>
+        <div className="export-actions"><button className="secondary-button" onClick={saveImage}>保存{photos.length > 1 ? "全部" : "照片"}</button><button className="primary-button" onClick={publishImage}>去发布 <span>↗</span></button></div>
       </section>
       {toast && <div className="toast" role="status">{toast}</div>}
     </main>
