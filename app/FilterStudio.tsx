@@ -464,6 +464,7 @@ export default function FilterStudio() {
   const [isAdjustmentOpen, setIsAdjustmentOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const adjustmentCanvasRef = useRef<HTMLCanvasElement>(null);
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const processedCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -502,25 +503,27 @@ export default function FilterStudio() {
   }, []);
 
   const drawComparison = useCallback(() => {
-    const display = displayCanvasRef.current;
     const source = sourceCanvasRef.current;
     const processed = processedCanvasRef.current;
-    if (!display || !source || !processed || !source.width) return;
-    const ctx = display.getContext("2d");
-    if (!ctx) return;
-    display.width = source.width;
-    display.height = source.height;
-    const split = Math.round((display.width * compareRef.current) / 100);
-    ctx.clearRect(0, 0, display.width, display.height);
-    ctx.drawImage(source, 0, 0);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(split, 0, display.width - split, display.height);
-    ctx.clip();
-    ctx.drawImage(processed, 0, 0);
-    ctx.restore();
-    ctx.fillStyle = "rgba(255,255,255,.95)";
-    ctx.fillRect(Math.max(0, split - 1), 0, 2, display.height);
+    if (!source || !processed || !source.width) return;
+    [displayCanvasRef.current, adjustmentCanvasRef.current].forEach((display) => {
+      if (!display) return;
+      const ctx = display.getContext("2d");
+      if (!ctx) return;
+      display.width = source.width;
+      display.height = source.height;
+      const split = Math.round((display.width * compareRef.current) / 100);
+      ctx.clearRect(0, 0, display.width, display.height);
+      ctx.drawImage(source, 0, 0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(split, 0, display.width - split, display.height);
+      ctx.clip();
+      ctx.drawImage(processed, 0, 0);
+      ctx.restore();
+      ctx.fillStyle = "rgba(255,255,255,.95)";
+      ctx.fillRect(Math.max(0, split - 1), 0, 2, display.height);
+    });
   }, []);
 
   const renderImage = useCallback(() => {
@@ -554,6 +557,30 @@ export default function FilterStudio() {
     compareRef.current = compare;
     drawComparison();
   }, [compare, drawComparison]);
+
+  useEffect(() => {
+    if (!isAdjustmentOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsAdjustmentOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    const frame = window.requestAnimationFrame(drawComparison);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [drawComparison, isAdjustmentOpen]);
+
+  const openAdjustments = () => {
+    if (!image) {
+      showToast("请先选择照片");
+      return;
+    }
+    setIsAdjustmentOpen(true);
+  };
 
   const loadImageFile = useCallback((file: File) => new Promise<PhotoItem>((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
@@ -908,53 +935,88 @@ export default function FilterStudio() {
         </section>
       </section>
 
-      <section className={`adjustment-card card ${isAdjustmentOpen ? "is-open" : ""}`}>
+      <section className="adjustment-card card">
         <div className="adjustment-summary">
           <button
             className="adjustment-toggle"
             type="button"
             aria-expanded={isAdjustmentOpen}
-            aria-controls="adjustment-content"
-            onClick={() => setIsAdjustmentOpen((open) => !open)}
+            aria-controls="adjustment-dialog"
+            onClick={openAdjustments}
           >
             <span className="adjustment-title">
               <span className="step-label">03 · 微调</span>
               <strong>{selectedPreset ? `微调「${selectedName}」` : "微调参数"}</strong>
-              <small>{adjustedCount > 0 ? `当前已应用 ${adjustedCount} 项参数` : "当前为原图参数"} · {isAdjustmentOpen ? "点击收起" : "需要时点击展开"}</small>
+              <small>{adjustedCount > 0 ? `当前已应用 ${adjustedCount} 项参数` : "当前为原图参数"} · 进入实时调色界面</small>
             </span>
-            <span className="adjustment-chevron" aria-hidden="true">⌄</span>
+            <span className="adjustment-chevron" aria-hidden="true">↗</span>
           </button>
-          {isAdjustmentOpen && (
-            <div className="adjustment-actions">
-              {photos.length > 1 && <button className="text-button" onClick={applyCurrentValuesToAll}>应用到全部</button>}
-              <button className="text-button" onClick={resetValues}>恢复原图</button>
-            </div>
-          )}
         </div>
-        {isAdjustmentOpen && (
-          <div className="adjustment-content" id="adjustment-content">
-            {CONTROL_GROUPS.map((group) => (
-              <div className="control-group" key={group.name}>
-                <div className="control-group-title"><strong>{group.name}</strong><span>{group.count}</span></div>
-                <div className="controls-grid">
-                  {group.controls.map((control) => (
-                    <label className="control-item" key={control.key}>
-                      <span className="control-name"><strong>{control.label}</strong><small>{control.hint}</small></span>
-                      <input type="range" min="-100" max="100" value={values[control.key]} onChange={(event) => updateValue(control.key, Number(event.target.value))} />
-                      <output className={values[control.key] !== 0 ? "changed" : ""}>{values[control.key] > 0 ? "+" : ""}{values[control.key]}</output>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </section>
 
       <section className="export-bar">
         <div><span className="step-label">完成</span><strong>{photos.length > 1 ? `${photos.length} 张照片已准备好` : "照片只在你的设备上处理"}</strong></div>
         <div className="export-actions"><button className="secondary-button" onClick={saveImage}>保存{photos.length > 1 ? "全部" : "照片"}</button><button className="primary-button" onClick={publishImage}>去发布 <span>↗</span></button></div>
       </section>
+      {isAdjustmentOpen && (
+        <div className="adjustment-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setIsAdjustmentOpen(false); }}>
+          <section className="adjustment-dialog" id="adjustment-dialog" role="dialog" aria-modal="true" aria-labelledby="adjustment-dialog-title">
+            <header className="adjustment-dialog-header">
+              <div>
+                <span className="step-label">实时微调</span>
+                <strong id="adjustment-dialog-title">{selectedPreset ? `「${selectedName}」· ${imageName}` : imageName}</strong>
+              </div>
+              <div className="dialog-actions">
+                {photos.length > 1 && <button className="dialog-text-button apply-all-button" type="button" onClick={applyCurrentValuesToAll}>应用到全部</button>}
+                <button className="dialog-text-button" type="button" onClick={resetValues}>恢复原图</button>
+                <button className="close-dialog" type="button" onClick={() => setIsAdjustmentOpen(false)} aria-label="关闭实时微调">×</button>
+              </div>
+            </header>
+            <div className="adjustment-workspace">
+              <div className="adjustment-preview-pane">
+                <div className="adjustment-canvas-frame">
+                  <canvas ref={adjustmentCanvasRef} aria-label="实时调色前后对比" />
+                  <div className="compare-label before-label">原图</div>
+                  <div className="compare-label after-label">效果</div>
+                </div>
+                <div className="compare-control dialog-compare-control">
+                  <span>原图</span>
+                  <input type="range" min="5" max="95" value={compare} onChange={(event) => setCompare(Number(event.target.value))} aria-label="实时调整前后对比位置" />
+                  <span>效果</span>
+                </div>
+                {photos.length > 1 && (
+                  <div className="adjustment-photo-strip" aria-label="切换正在微调的照片">
+                    {photos.map((photo, index) => (
+                      <button className={photo.id === activePhoto?.id ? "active" : ""} type="button" key={photo.id} onClick={() => { setActivePhotoId(photo.id); setCompare(32); }} aria-label={`微调第 ${index + 1} 张照片`}>
+                        <img src={photo.thumbnail} alt="" />
+                        <span>{index + 1}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {photoProfile && <div className="dialog-profile">{photoProfile.labels.map((label) => <span key={label}>{label}</span>)}</div>}
+              </div>
+              <div className="adjustment-controls-pane">
+                <div className="controls-intro"><strong>边调边看</strong><span>当前修改只影响这张照片</span></div>
+                {CONTROL_GROUPS.map((group) => (
+                  <div className="control-group" key={group.name}>
+                    <div className="control-group-title"><strong>{group.name}</strong><span>{group.count}</span></div>
+                    <div className="controls-grid dialog-controls-grid">
+                      {group.controls.map((control) => (
+                        <label className="control-item" key={control.key}>
+                          <span className="control-name"><strong>{control.label}</strong><small>{control.hint}</small></span>
+                          <input type="range" min="-100" max="100" value={values[control.key]} onChange={(event) => updateValue(control.key, Number(event.target.value))} />
+                          <output className={values[control.key] !== 0 ? "changed" : ""}>{values[control.key] > 0 ? "+" : ""}{values[control.key]}</output>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
       {toast && <div className="toast" role="status">{toast}</div>}
     </main>
   );
