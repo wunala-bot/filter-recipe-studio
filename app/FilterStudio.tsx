@@ -462,6 +462,8 @@ export default function FilterStudio() {
   const [toast, setToast] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isAdjustmentOpen, setIsAdjustmentOpen] = useState(false);
+  const [isPresetLibraryOpen, setIsPresetLibraryOpen] = useState(false);
+  const [presetSearch, setPresetSearch] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const adjustmentCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -491,6 +493,11 @@ export default function FilterStudio() {
     () => photoProfile && recipeBaseline ? createRecipeAdaptation(recipeBaseline, photoProfile) : null,
     [photoProfile, recipeBaseline],
   );
+  const filteredPresets = useMemo(() => {
+    const query = presetSearch.trim().toLowerCase();
+    if (!query) return PRESETS;
+    return PRESETS.filter((preset) => `${preset.name} ${preset.scene} ${preset.tone}`.toLowerCase().includes(query));
+  }, [presetSearch]);
 
   const updateActivePhoto = useCallback((updater: (photo: PhotoItem) => PhotoItem) => {
     if (!activePhotoId) return;
@@ -559,10 +566,12 @@ export default function FilterStudio() {
   }, [compare, drawComparison]);
 
   useEffect(() => {
-    if (!isAdjustmentOpen) return;
+    if (!isAdjustmentOpen && !isPresetLibraryOpen) return;
     const previousOverflow = document.body.style.overflow;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsAdjustmentOpen(false);
+      if (event.key !== "Escape") return;
+      setIsAdjustmentOpen(false);
+      setIsPresetLibraryOpen(false);
     };
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", closeOnEscape);
@@ -572,7 +581,7 @@ export default function FilterStudio() {
       window.removeEventListener("keydown", closeOnEscape);
       window.cancelAnimationFrame(frame);
     };
-  }, [drawComparison, isAdjustmentOpen]);
+  }, [drawComparison, isAdjustmentOpen, isPresetLibraryOpen]);
 
   const openAdjustments = () => {
     if (!image) {
@@ -870,6 +879,13 @@ export default function FilterStudio() {
               </div>
             </div>
           )}
+          {image && (
+            <button className="photo-adjustment-launch" type="button" onClick={openAdjustments}>
+              <span aria-hidden="true">☷</span>
+              <strong>微调</strong>
+              <small>{adjustedCount > 0 ? `${adjustedCount} 项已调整` : "按需要调整参数"}</small>
+            </button>
+          )}
           {photoProfile && (
             <div className="photo-profile" aria-label="原图分析结果">
               <strong><span aria-hidden="true">✦</span> 原图分析</strong>
@@ -889,8 +905,12 @@ export default function FilterStudio() {
           {activeTab === "presets" ? (
             <div className="preset-content">
               <p className="panel-intro">选择后会应用到全部照片，每张照片仍可单独智能适配。</p>
+              <div className="preset-toolbar">
+                <strong>精选配方</strong>
+                <button type="button" onClick={() => setIsPresetLibraryOpen(true)}>查看全部 · {PRESETS.length} <span>›</span></button>
+              </div>
               <div className="preset-grid">
-                {PRESETS.map((preset) => (
+                {PRESETS.slice(0, 4).map((preset) => (
                   <button key={preset.id} className={`preset-card ${selectedPreset === preset.id ? "selected" : ""}`} onClick={() => applyPreset(preset)}>
                     <span className="preset-swatch" style={{ background: preset.swatch }}>{selectedPreset === preset.id && <span className="check-mark">✓</span>}</span>
                     <span className="preset-meta"><strong>{preset.name}</strong><small>{preset.scene}</small></span>
@@ -935,29 +955,37 @@ export default function FilterStudio() {
         </section>
       </section>
 
-      <section className="adjustment-card card">
-        <div className="adjustment-summary">
-          <button
-            className="adjustment-toggle"
-            type="button"
-            aria-expanded={isAdjustmentOpen}
-            aria-controls="adjustment-dialog"
-            onClick={openAdjustments}
-          >
-            <span className="adjustment-title">
-              <span className="step-label">03 · 微调</span>
-              <strong>{selectedPreset ? `微调「${selectedName}」` : "微调参数"}</strong>
-              <small>{adjustedCount > 0 ? `当前已应用 ${adjustedCount} 项参数` : "当前为原图参数"} · 进入实时调色界面</small>
-            </span>
-            <span className="adjustment-chevron" aria-hidden="true">↗</span>
-          </button>
-        </div>
-      </section>
-
       <section className="export-bar">
         <div><span className="step-label">完成</span><strong>{photos.length > 1 ? `${photos.length} 张照片已准备好` : "照片只在你的设备上处理"}</strong></div>
         <div className="export-actions"><button className="secondary-button" onClick={saveImage}>保存{photos.length > 1 ? "全部" : "照片"}</button><button className="primary-button" onClick={publishImage}>去发布 <span>↗</span></button></div>
       </section>
+      {isPresetLibraryOpen && (
+        <div className="preset-library-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setIsPresetLibraryOpen(false); }}>
+          <section className="preset-library-dialog" role="dialog" aria-modal="true" aria-labelledby="preset-library-title">
+            <header className="preset-library-header">
+              <div><span className="step-label">配方库</span><strong id="preset-library-title">选择一种照片感觉</strong></div>
+              <button className="close-dialog" type="button" onClick={() => setIsPresetLibraryOpen(false)} aria-label="关闭配方库">×</button>
+            </header>
+            <div className="preset-library-body">
+              <label className="preset-search">
+                <span aria-hidden="true">⌕</span>
+                <input value={presetSearch} onChange={(event) => setPresetSearch(event.target.value)} placeholder="搜索风格、场景或色调" autoFocus />
+              </label>
+              <div className="preset-library-count">{presetSearch ? `找到 ${filteredPresets.length} 个配方` : `全部配方 · ${PRESETS.length}`}</div>
+              <div className="preset-library-grid">
+                {filteredPresets.map((preset) => (
+                  <button key={preset.id} className={`preset-card ${selectedPreset === preset.id ? "selected" : ""}`} onClick={() => { applyPreset(preset); setIsPresetLibraryOpen(false); }}>
+                    <span className="preset-swatch" style={{ background: preset.swatch }}>{selectedPreset === preset.id && <span className="check-mark">✓</span>}</span>
+                    <span className="preset-meta"><strong>{preset.name}</strong><small>{preset.scene}</small></span>
+                    <span className="preset-tone">{preset.tone}</span>
+                  </button>
+                ))}
+              </div>
+              {!filteredPresets.length && <div className="preset-empty">没有找到相关配方</div>}
+            </div>
+          </section>
+        </div>
+      )}
       {isAdjustmentOpen && (
         <div className="adjustment-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setIsAdjustmentOpen(false); }}>
           <section className="adjustment-dialog" id="adjustment-dialog" role="dialog" aria-modal="true" aria-labelledby="adjustment-dialog-title">
