@@ -1001,7 +1001,7 @@ export default function FilterStudio() {
               </div>
             </header>
             <div className="adjustment-workspace">
-              <div className="adjustment-preview-pane">
+              <div className={`adjustment-preview-pane ${image && image.naturalHeight > image.naturalWidth ? "is-portrait" : "is-landscape"}`}>
                 <div className="adjustment-canvas-frame">
                   <canvas ref={adjustmentCanvasRef} aria-label="实时调色前后对比" />
                   <div className="compare-label before-label">原图</div>
