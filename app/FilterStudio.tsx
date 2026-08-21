@@ -452,7 +452,7 @@ function parseRecipe(text: string) {
 
 export default function FilterStudio() {
   const [activeTab, setActiveTab] = useState<"presets" | "paste">("presets");
-  const [recipeText, setRecipeText] = useState("曝光-19，鲜明度-40，对比度+6，亮度-14，饱和度-15，锐化+18，清晰度+29");
+  const [recipeText, setRecipeText] = useState("");
   const [sourceApp, setSourceApp] = useState("iPhone 相册");
   const [parseResult, setParseResult] = useState<ReturnType<typeof parseRecipe> | null>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
